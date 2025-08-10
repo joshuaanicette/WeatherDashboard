@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Weather App</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/babel-standalone@7.22.5/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios@1.4.0/dist/axios.min.js"></script>
+</head>
+<body class="bg-gray-100">
+    <div id="root"></div>
+    <script type="text/babel">
+        const API_KEY = "8ebd10ad04f96444e9024741ec50b1b2";
+        const BASE_URL = "http://api.openweathermap.org/data/2.5/";
+
+        function WeatherApp() {
+            const [aiName, setAiName] = React.useState(localStorage.getItem('aiName') || 'josh');
+            const [output, setOutput] = React.useState(`Welcome! My name is ${aiName.charAt(0).toUpperCase() + aiName.slice(1)}.`);
+            const [cities, setCities] = React.useState(JSON.parse(localStorage.getItem('savedCities')) || []);
+            const [isListening, setIsListening] = React.useState(false);
+            const [chartData, setChartData] = React.useState(null);
+            const recognition = React.useRef(null);
+
+            React.useEffect(() => {
+                localStorage.setItem('aiName', aiName);
+                localStorage.setItem('savedCities', JSON.stringify(cities));
+
+                // Initialize Web Speech API
+                if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+                    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                    recognition.current = new SpeechRecognition();
+                    recognition.current.continuous = false;
+                    recognition.current.interimResults = false;
+                    recognition.current.onresult = (event) => {
+                        const command = event.results[0][0].transcript.toLowerCase();
+                        setOutput(prev => prev + `\nYou said: ${command}`);
+                        handleVoiceCommand(command);
+                        setIsListening(false);
+                    };
+                    recognition.current.onerror = (event) => {
+                        setOutput(prev => prev + `\nSpeech recognition error: ${event.error}`);
+                        speak(`Sorry, there was an error with speech recognition: ${event.error}`);
+                        setIsListening(false);
+                    };
+                    recognition.current.onend = () => {
+                        setIsListening(false);
+                    };
+                } else {
+                    setOutput(prev => prev + `\nSpeech recognition is not supported in this browser.`);
+                    speak("Speech recognition is not supported in this browser.");
+                }
+            }, [aiName, cities]);
+
+            const speak = (text) => {
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = 'en-US';
+                window.speechSynthesis.speak(utterance);
+            };
+
+            const extractCities = (command) => {
+                let cityString = '';
+                if (command.includes(' in ')) {
+                    cityString = command.split(' in ')[1].trim();
+                } else if (command.includes(' for ')) {
+                    cityString = command.split(' for ')[1].trim();
+                }
+                if (cityString) {
+                    cityString = cityString.replace(/,/g, ' and ');
+                    return cityString.split(' and ').map(c => c.trim()).filter(c => c);
+                }
+                return [];
+            };
+
+            const getWeather = async (city) => {
+                try {
+                    const response = await axios.get(`${BASE_URL}weather?q=${city}&appid=${API_KEY}&units=metric`);
+                    return response.data;
+                } catch (error) {
+                    setOutput(prev => prev + `\nError retrieving weather data for ${city}: ${error.message}`);
+                    speak(`Error retrieving weather data for ${city}.`);
+                    return null;
+                }
+            };
+
+            const getForecast = async (city) => {
+                try {
+                    const response = await axios.get(`${BASE_URL}forecast?q=${city}&appid=${API_KEY}&units=metric`);
+                    return response.data;
+                } catch (error) {
+                    setOutput(prev => prev + `\nError retrieving forecast data for ${city}: ${error.message}`);
+                    speak(`Error retrieving forecast data for ${city}.`);
+                    return null;
+                }
+            };
+
+            const getAirPollution = async (lat, lon) => {
+                try {
+                    const response = await axios.get(`${BASE_URL}air_pollution?lat=${lat}&lon=${lon}&appid=${API_KEY}`);
+                    return response.data;
+                } catch (error) {
+                    setOutput(prev => prev + `\nError retrieving air pollution data: ${error.message}`);
+                    speak(`Error retrieving air pollution data.`);
+                    return null;
+                }
+            };
+
+            const celsiusToFahrenheit = (celsius) => celsius * 9/5 + 32;
+
+            const displayNumericForecast = async (city) => {
+                setOutput(`Displaying numeric forecast graph for ${city}...`);
+                const forecastData = await getForecast(city);
+                if (!forecastData || !forecastData.list) {
+                    setOutput(prev => prev + `\nCannot retrieve forecast data for ${city}.`);
+                    speak(`Cannot retrieve forecast data for ${city}.`);
+                    return;
+                }
+
+                const timestamps = forecastData.list.map(entry => entry.dt_txt);
+                const tempsF = forecastData.list.map(entry => celsiusToFahrenheit(entry.main.temp));
+                const hums = forecastData.list.map(entry => entry.main.humidity);
+                const rains = forecastData.list.map(entry => entry.rain?.['3h'] || 0);
+                const snows = forecastData.list.map(entry => entry.snow?.['3h'] || 0);
+
+                setChartData({
+                    labels: timestamps,
+                    datasets: [
+                        { label: 'Temperature (°F)', data: tempsF, borderColor: '#EF4444', backgroundColor: '#EF4444', fill: false, pointRadius: 5 },
+                        { label: 'Humidity (%)', data: hums, borderColor: '#3B82F6', backgroundColor: '#3B82F6', fill: false, pointRadius: 5 },
+                        { label: 'Rain (mm)', data: rains, borderColor: '#06B6D4', backgroundColor: '#06B6D4', fill: false, pointRadius: 5 },
+                        { label: 'Snow (mm)', data: snows, borderColor: '#8B5CF6', backgroundColor: '#8B5CF6', fill: false, pointRadius: 5 }
+                    ]
+                });
+
+                if (!cities.includes(city)) {
+                    setCities(prev => [...prev, city]);
+                }
+            };
+
+            const displayConditionsForecast = async (city) => {
+                setOutput(`Displaying forecast conditions graph for ${city}...`);
+                const forecastData = await getForecast(city);
+                if (!forecastData || !forecastData.list) {
+                    setOutput(prev => prev + `\nCannot retrieve forecast data for ${city}.`);
+                    speak(`Cannot retrieve forecast data for ${city}.`);
+                    return;
+                }
+
+                const timestamps = forecastData.list.map(entry => entry.dt_txt);
+                const tempsF = forecastData.list.map(entry => celsiusToFahrenheit(entry.main.temp));
+                const conditions = forecastData.list.map(entry => entry.weather[0].description);
+
+                setChartData({
+                    labels: timestamps,
+                    datasets: [
+                        {
+                            label: 'Temperature (°F)',
+                            data: tempsF,
+                            borderColor: '#EC4899',
+                            backgroundColor: '#EC4899',
+                            fill: false,
+                            pointRadius: 5
+                        }
+                    ],
+                    annotations: conditions.map((cond, i) => ({
+                        type: 'label',
+                        content: cond.charAt(0).toUpperCase() + cond.slice(1),
+                        xValue: i,
+                        yValue: tempsF[i],
+                        yAdjust: 10,
+                        font: { size: 10 }
+                    }))
+                });
+
+                if (!cities.includes(city)) {
+                    setCities(prev => [...prev, city]);
+                }
+            };
+
+            const currentWeather = async (city) => {
+                setOutput('');
+                const data = await getWeather(city);
+                if (data) {
+                    const tempF = celsiusToFahrenheit(data.main.temp);
+                    const feelsF = celsiusToFahrenheit(data.main.feels_like);
+                    const info = `
+City: ${data.name}
+Temperature: ${tempF.toFixed(1)}°F / ${data.main.temp.toFixed(1)}°C
+Feels Like: ${feelsF.toFixed(1)}°F / ${data.main.feels_like.toFixed(1)}°C
+Weather: ${data.weather[0].description.charAt(0).toUpperCase() + data.weather[0].description.slice(1)}
+Humidity: ${data.main.humidity}%
+Wind Speed: ${data.wind.speed} m/s
+Coordinates: Lat ${data.coord.lat}, Lon ${data.coord.lon}
+`;
+                    setOutput(info);
+                    speak(`In ${data.name}, the temperature is ${tempF.toFixed(1)} degrees Fahrenheit.`);
+                    if (!cities.includes(city)) {
+                        setCities(prev => [...prev, city]);
+                    }
+                }
+            };
+
+            const airPollution = async (city) => {
+                setOutput('');
+                const data = await getWeather(city);
+                if (data) {
+                    const airData = await getAirPollution(data.coord.lat, data.coord.lon);
+                    if (airData) {
+                        const aqi = airData.list[0].main.aqi;
+                        const aqiLevels = { 1: 'Good', 2: 'Fair', 3: 'Moderate', 4: 'Poor', 5: 'Very Poor' };
+                        const info = `Air Quality Index (AQI): ${aqi} - ${aqiLevels[aqi] || 'Unknown'}`;
+                        setOutput(info);
+                        speak(`The air quality index in ${city} is ${aqi}, which is considered ${aqiLevels[aqi] || 'unknown'}.`);
+                        if (!cities.includes(city)) {
+                            setCities(prev => [...prev, city]);
+                        }
+                    }
+                }
+            };
+
+            const handleVoiceCommand = (command) => {
+                const cities = extractCities(command);
+                if (!cities.length) {
+                    setOutput(prev => prev + `\nNo city names detected. Please specify a city.`);
+                    speak("Please specify a city.");
+                    recognition.current.start();
+                    return;
+                }
+
+                if (command.includes('numeric')) {
+                    cities.forEach(city => displayNumericForecast(city));
+                } else if (command.includes('conditions')) {
+                    cities.forEach(city => displayConditionsForecast(city));
+                } else if (command.includes('air') || command.includes('pollution')) {
+                    cities.forEach(city => airPollution(city));
+                } else if (command.includes('weather')) {
+                    cities.forEach(city => {
+                        currentWeather(city);
+                        setTimeout(() => displayNumericForecast(city), 100);
+                        setTimeout(() => displayConditionsForecast(city), 100);
+                    });
+                } else if (command.includes('change') && command.includes('name')) {
+                    setOutput(prev => prev + `\nPlease say the new AI name.`);
+                    speak("Please say the new AI name.");
+                    recognition.current.start();
+                    recognition.current.onresult = (event) => {
+                        const newName = event.results[0][0].transcript.toLowerCase();
+                        setAiName(newName);
+                        setOutput(prev => prev + `\nAI name changed to ${newName.charAt(0).toUpperCase() + newName.slice(1)}.`);
+                        speak(`AI name changed to ${newName.charAt(0).toUpperCase() + newName.slice(1)}.`);
+                        setIsListening(false);
+                    };
+                } else {
+                    setOutput(prev => prev + `\nSorry, I did not understand your command.`);
+                    speak("Sorry, I did not understand your command.");
+                }
+            };
+
+            const startVoiceCommand = () => {
+                if (!recognition.current) {
+                    setOutput(prev => prev + `\nSpeech recognition is not supported in this browser.`);
+                    speak("Speech recognition is not supported in this browser.");
+                    return;
+                }
+                setOutput(prev => prev + `\nWould you like to use voice commands? Say yes or no.`);
+                speak("Would you like to use voice commands? Say yes or no.");
+                setIsListening(true);
+                recognition.current.start();
+                recognition.current.onresult = (event) => {
+                    const answer = event.results[0][0].transcript.toLowerCase();
+                    setOutput(prev => prev + `\nYou said: ${answer}`);
+                    if (answer.includes('yes')) {
+                        setOutput(prev => prev + `\nPlease say your command now.`);
+                        speak("Please say your command now.");
+                        setTimeout(() => {
+                            recognition.current.start();
+                        }, 1000);
+                    } else {
+                        setOutput(prev => prev + `\nOkay, please use the app manually.`);
+                        speak("Okay, please use the app manually.");
+                        setIsListening(false);
+                    }
+                };
+            };
+
+            const changeAIName = () => {
+                const newName = prompt("Enter new AI name:", aiName);
+                if (newName) {
+                    setAiName(newName.toLowerCase());
+                    setOutput(`AI name changed to ${newName.charAt(0).toUpperCase() + newName.slice(1)}.`);
+                    speak(`AI name changed to ${newName.charAt(0).toUpperCase() + newName.slice(1)}.`);
+                }
+            };
+
+            const handleAction = (action) => {
+                const city = prompt("Enter city name:");
+                if (city) {
+                    if (action === 'weather') currentWeather(city);
+                    else if (action === 'numeric') displayNumericForecast(city);
+                    else if (action === 'conditions') displayConditionsForecast(city);
+                    else if (action === 'air') airPollution(city);
+                }
+            };
+
+            return (
+                <div className="flex h-screen">
+                    <div className="w-1/4 bg-blue-200 p-4 flex flex-col gap-4">
+                        <button className="bg-blue-400 hover:bg-blue-500 text-white py-2 rounded" onClick={() => handleAction('weather')}>Current Weather</button>
+                        <button className="bg-blue-400 hover:bg-blue-500 text-white py-2 rounded" onClick={() => handleAction('numeric')}>Forecast Graph (Numeric)</button>
+                        <button className="bg-blue-400 hover:bg-blue-500 text-white py-2 rounded" onClick={() => handleAction('conditions')}>Forecast Graph (Conditions)</button>
+                        <button className="bg-blue-400 hover:bg-blue-500 text-white py-2 rounded" onClick={() => handleAction('air')}>Air Pollution</button>
+                        <button className="bg-blue-400 hover:bg-blue-500 text-white py-2 rounded" onClick={startVoiceCommand} disabled={isListening}>
+                            {isListening ? 'Listening...' : 'Voice Command'}
+                        </button>
+                        <button className="bg-blue-400 hover:bg-blue-500 text-white py-2 rounded" onClick={changeAIName}>Settings</button>
+                        <button className="bg-red-500 hover:bg-red-600 text-white py-2 rounded" onClick={() => window.close()}>Exit</button>
+                    </div>
+                    <div className="w-3/4 bg-white p-4 flex flex-col">
+                        <h1 className="text-2xl font-bold mb-4">Welcome! My name is {aiName.charAt(0).toUpperCase() + aiName.slice(1)}.</h1>
+                        <textarea
+                            className="flex-grow border border-gray-300 rounded p-2 mb-4 font-mono text-sm"
+                            value={output}
+                            readOnly
+                        ></textarea>
+                        {chartData && (
+                            <canvas id="weatherChart" className="w-full h-96"></canvas>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        React.useEffect(() => {
+            if (window.chartInstance) {
+                window.chartInstance.destroy();
+            }
+            const ctx = document.getElementById('weatherChart')?.getContext('2d');
+            if (ctx && window.ReactApp?.chartData) {
+                window.chartInstance = new Chart(ctx, {
+                    type: 'line',
+                    data: window.ReactApp.chartData,
+                    options: {
+                        responsive: true,
+                        scales: {
+                            x: { ticks: { autoSkip: true, maxRotation: 45, minRotation: 45 } },
+                            y: { beginAtZero: false }
+                        },
+                        plugins: {
+                            annotation: {
+                                annotations: window.ReactApp.chartData.annotations || []
+                            },
+                            legend: { display: true },
+                            tooltip: { enabled: true }
+                        }
+                    }
+                });
+            }
+        });
+
+        window.ReactApp = { chartData: null };
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<WeatherApp />);
+    </script>
+</body>
+</html>
